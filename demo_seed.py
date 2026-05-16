@@ -91,9 +91,13 @@ def main():
             print(f"  サブスクリプション更新: active (2099-12-31まで)")
 
         # ───────────────────────────────────────────
-        # テーブル (T1〜T8)
+        # テーブル (T1〜T12 通常席 + VIP-1〜VIP-3)
         # ───────────────────────────────────────────
-        table_names = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"]
+        table_names = [
+            "T1", "T2", "T3", "T4", "T5", "T6",
+            "T7", "T8", "T9", "T10", "T11", "T12",
+            "VIP-1", "VIP-2", "VIP-3",
+        ]
         existing_tables = {t.name for t in db.query(Table).filter_by(store_id=store_id).all()}
         for tname in table_names:
             if tname not in existing_tables:
@@ -108,12 +112,23 @@ def main():
         # キャスト
         # ───────────────────────────────────────────
         cast_data = [
-            {"name": "ゆかり", "rank": "エース"},
-            {"name": "なな",   "rank": "レギュラー"},
-            {"name": "りん",   "rank": "レギュラー"},
-            {"name": "さくら", "rank": "レギュラー"},
-            {"name": "ほのか", "rank": "新人"},
-            {"name": "みお",   "rank": "新人"},
+            # No.1 / 主任クラス（最上位）
+            {"name": "美咲",   "rank": "No.1"},
+            {"name": "玲奈",   "rank": "主任"},
+            # 人気キャスト
+            {"name": "麗子",   "rank": "人気"},
+            {"name": "沙耶香", "rank": "人気"},
+            {"name": "杏奈",   "rank": "人気"},
+            # レギュラー
+            {"name": "詩織",   "rank": "レギュラー"},
+            {"name": "美月",   "rank": "レギュラー"},
+            {"name": "七海",   "rank": "レギュラー"},
+            {"name": "莉央",   "rank": "レギュラー"},
+            # 新人
+            {"name": "茉莉",   "rank": "新人"},
+            {"name": "ありさ", "rank": "新人"},
+            # ヘルプ
+            {"name": "ゆうな", "rank": "ヘルプ"},
         ]
         existing_casts = {c.name for c in db.query(Cast).filter_by(store_id=store_id).all()}
         for cd in cast_data:
@@ -129,24 +144,36 @@ def main():
         # メニュー
         # ───────────────────────────────────────────
         item_data = [
-            # セット料金
-            {"name": "1時間セット",       "category": "set",    "price": 4000.0},
-            {"name": "フリードリンク90分", "category": "set",    "price": 6000.0},
-            # ドリンク
-            {"name": "ハイボール",         "category": "drink",  "price": 800.0},
-            {"name": "ビール",             "category": "drink",  "price": 800.0},
-            {"name": "レモンサワー",        "category": "drink",  "price": 800.0},
-            {"name": "カシスオレンジ",      "category": "drink",  "price": 900.0},
-            {"name": "カクテル",           "category": "drink",  "price": 900.0},
-            {"name": "ソフトドリンク",      "category": "drink",  "price": 500.0},
-            {"name": "シャンパン（グラス）", "category": "drink",  "price": 1500.0},
-            # ボトル
-            {"name": "ウイスキーボトル",    "category": "bottle", "price": 12000.0, "keepable": True, "capacity_ml": 700},
-            {"name": "シャンパンボトル",    "category": "bottle", "price": 25000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "焼酎ボトル",         "category": "bottle", "price": 8000.0,  "keepable": True, "capacity_ml": 720},
-            # フード
-            {"name": "おつまみ盛合せ",      "category": "food",   "price": 1500.0},
-            {"name": "フライドポテト",      "category": "food",   "price": 800.0},
+            # ━━ セット料金（キャバクラ標準料金体系）━━
+            {"name": "1時間セット",            "category": "set",    "price": 8000.0},
+            {"name": "90分セット",             "category": "set",    "price": 12000.0},
+            {"name": "2時間フリーセット",       "category": "set",    "price": 15000.0},
+            {"name": "VIPルーム1時間",         "category": "set",    "price": 15000.0},
+            # ━━ ドリンク（キャスト用ドリンク含む）━━
+            {"name": "ハウスウイスキー（水割り）", "category": "drink",  "price": 1200.0},
+            {"name": "ビール（瓶）",            "category": "drink",  "price": 1000.0},
+            {"name": "ハイボール",             "category": "drink",  "price": 1200.0},
+            {"name": "カシスオレンジ",          "category": "drink",  "price": 1200.0},
+            {"name": "カクテル各種",            "category": "drink",  "price": 1500.0},
+            {"name": "ソフトドリンク",          "category": "drink",  "price": 800.0},
+            {"name": "キャストドリンク",        "category": "drink",  "price": 1500.0},
+            {"name": "シャンパン（グラス）",     "category": "drink",  "price": 2500.0},
+            # ━━ ハウスボトル ━━
+            {"name": "焼酎ボトル",             "category": "bottle", "price": 10000.0, "keepable": True, "capacity_ml": 720},
+            {"name": "ウイスキーボトル（バーボン）", "category": "bottle", "price": 15000.0, "keepable": True, "capacity_ml": 700},
+            {"name": "ワインボトル（赤/白）",    "category": "bottle", "price": 15000.0, "keepable": False, "capacity_ml": 750},
+            # ━━ シャンパン（キャバクラの花形）━━
+            {"name": "モエ・エ・シャンドン",     "category": "bottle", "price": 30000.0, "keepable": False, "capacity_ml": 750},
+            {"name": "ヴーヴ・クリコ",          "category": "bottle", "price": 40000.0, "keepable": False, "capacity_ml": 750},
+            {"name": "ドンペリ 白",             "category": "bottle", "price": 80000.0, "keepable": False, "capacity_ml": 750},
+            {"name": "ドンペリ ロゼ",           "category": "bottle", "price": 120000.0, "keepable": False, "capacity_ml": 750},
+            {"name": "クリスタル",             "category": "bottle", "price": 150000.0, "keepable": False, "capacity_ml": 750},
+            {"name": "エンジェルシャンパン",    "category": "bottle", "price": 200000.0, "keepable": False, "capacity_ml": 750},
+            # ━━ フード ━━
+            {"name": "フルーツ盛合せ",          "category": "food",   "price": 3000.0},
+            {"name": "チーズ盛合せ",            "category": "food",   "price": 2500.0},
+            {"name": "おつまみ盛合せ",          "category": "food",   "price": 2000.0},
+            {"name": "高級チョコレート",        "category": "food",   "price": 1500.0},
         ]
         existing_items = {i.name for i in db.query(Item).filter_by(store_id=store_id).all()}
         for it in item_data:
@@ -176,36 +203,54 @@ def main():
             for c in all_casts:
                 cfg = db.query(CastSalaryConfig).filter_by(cast_id=c.id).first()
                 if not cfg:
-                    # エースはバック高め、新人は低め
-                    if c.rank == "エース":
+                    # キャバクラはランク制が強いのでレートを多段階に
+                    if c.rank in ("No.1", "主任"):
+                        # No.1・主任クラス（最上位）
                         db.add(CastSalaryConfig(
                             cast_id=c.id,
                             store_id=store_id,
-                            drink_back_rate=0.30,   # ドリンクバック30%
-                            nom_fee_hon=3000,        # 本指名バック3,000円
-                            nom_fee_dohan=5000,      # 同伴バック5,000円
-                            floor_rate=1000,         # 場内バック1,000円/件
-                            hourly_rate=1500,
+                            drink_back_rate=0.40,    # ドリンクバック40%
+                            nom_fee_hon=5000,         # 本指名バック5,000円
+                            nom_fee_jyonai=1500,      # 場内指名バック1,500円
+                            nom_fee_dohan=10000,      # 同伴バック10,000円
+                            floor_rate=2000,          # 場内固定バック2,000円/件
+                            hourly_rate=3000,         # 時給3,000円
+                        ))
+                    elif c.rank == "人気":
+                        # 人気キャスト
+                        db.add(CastSalaryConfig(
+                            cast_id=c.id,
+                            store_id=store_id,
+                            drink_back_rate=0.35,
+                            nom_fee_hon=4000,
+                            nom_fee_jyonai=1200,
+                            nom_fee_dohan=8000,
+                            floor_rate=1500,
+                            hourly_rate=2500,
                         ))
                     elif c.rank == "レギュラー":
+                        # レギュラー
+                        db.add(CastSalaryConfig(
+                            cast_id=c.id,
+                            store_id=store_id,
+                            drink_back_rate=0.30,
+                            nom_fee_hon=3000,
+                            nom_fee_jyonai=1000,
+                            nom_fee_dohan=6000,
+                            floor_rate=1000,
+                            hourly_rate=2000,
+                        ))
+                    else:
+                        # 新人・ヘルプ
                         db.add(CastSalaryConfig(
                             cast_id=c.id,
                             store_id=store_id,
                             drink_back_rate=0.25,
                             nom_fee_hon=2000,
+                            nom_fee_jyonai=800,
                             nom_fee_dohan=4000,
-                            floor_rate=800,
-                            hourly_rate=1300,
-                        ))
-                    else:  # 新人
-                        db.add(CastSalaryConfig(
-                            cast_id=c.id,
-                            store_id=store_id,
-                            drink_back_rate=0.20,
-                            nom_fee_hon=1500,
-                            nom_fee_dohan=3000,
                             floor_rate=500,
-                            hourly_rate=1200,
+                            hourly_rate=1500,
                         ))
             print(f"✅ キャスト給与設定: {len(all_casts)}名分")
         except Exception as e:
@@ -214,10 +259,11 @@ def main():
         db.commit()
         print()
         print("━" * 50)
-        print("🍸 デモデータの投入が完了しました！")
+        print("🍸 NEXUS Cabaret デモデータの投入が完了しました！")
         print(f"   店舗名 : Cabaret VENUS（デモ）")
-        print(f"   テーブル: T1〜T8")
-        print(f"   キャスト: ゆかり、なな、りん、さくら、ほのか、みお")
+        print(f"   テーブル: T1〜T12 + VIP-1〜VIP-3（計15席）")
+        print(f"   キャスト: 12名（No.1/主任/人気/レギュラー/新人/ヘルプ）")
+        print(f"   メニュー: シャンパン10種以上含む計25品")
         print(f"   ログインパスワード: posstart2024")
         print("━" * 50)
 
