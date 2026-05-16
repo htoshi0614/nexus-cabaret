@@ -170,7 +170,7 @@ body{background:var(--bg);color:var(--text);display:flex;align-items:center;just
 
     <div class="field">
       <label>店舗名</label>
-      <input id="shopName" placeholder="例: Bar LUNA">
+      <input id="shopName" placeholder="例: Club VENUS">
     </div>
     <div class="row2">
       <div class="field">
@@ -447,7 +447,7 @@ body{background:var(--bg);color:var(--text);display:flex;align-items:center;just
   </div>
 
   <div class="footer">
-    <p>© 2024 NEXUS Cabaret — お問い合わせ: support@posstart.jp</p>
+    <p>© 2024 NEXUS Cabaret — お問い合わせ: support@nexus-cabaret.jp</p>
   </div>
 </div>
 
@@ -2284,7 +2284,7 @@ def ui():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Cabaret POS - Floor</title>
+<title>NEXUS Cabaret - フロア</title>
 <style>
 :root{
   --bg:#0b1220;--card:#0f172a;--line:#1f2937;--text:#e5e7eb;--muted:#b0bec5;--accent:#0ea5e9;
@@ -2436,7 +2436,7 @@ hr{border:0;border-top:1px solid var(--line);margin:10px 0}
 </div></div>
 
 <header>
-  <h1>Cabaret POS</h1>
+  <h1>NEXUS Cabaret</h1>
   <label>Store <input id="storeId" type="number" value="1" style="width:70px"></label>
   <label>Role
     <select id="role">
@@ -3753,7 +3753,7 @@ load(); setInterval(load,10000);
 def ui_attendance():
     return HTMLResponse(r"""<!doctype html><html lang="ja"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>出退勤 - Cabaret POS</title>
+<title>出退勤 - NEXUS Cabaret</title>
 <script>
 // 早期ガード: スタッフ等のオーナー以外を弾く（未設定はowner扱い: コードベース規約に準拠）
 (function(){
@@ -3985,7 +3985,7 @@ connectWS();
 def ui_attendance_manage():
     return HTMLResponse(r"""<!doctype html><html lang="ja"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>出退勤 修正 - Cabaret POS</title>
+<title>出退勤 修正 - NEXUS Cabaret</title>
 <style>
 :root{--bg:#0b1220;--card:#0f172a;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#0ea5e9;--green:#22c55e;--red:#ef4444;--amber:#f59e0b}
 *{box-sizing:border-box;font-family:-apple-system,system-ui,"Noto Sans JP",sans-serif}
