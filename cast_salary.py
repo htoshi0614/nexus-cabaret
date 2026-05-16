@@ -49,6 +49,32 @@ class DrinkBackRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     cast       = relationship("Cast")
 
+class CastDeduction(Base):
+    """キャストごとの控除（遅刻罰金、欠勤罰金、衣装代等）"""
+    __tablename__ = "cast_deductions"
+    id              = Column(Integer, primary_key=True)
+    cast_id         = Column(Integer, ForeignKey("casts.id"))
+    store_id        = Column(Integer, ForeignKey("stores.id"))
+    year            = Column(Integer)
+    month           = Column(Integer)
+    deduction_type  = Column(String, default="other")  # late / absent / penalty / equipment / other
+    amount          = Column(Float, default=0.0)
+    note            = Column(Text, default="")
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    cast            = relationship("Cast")
+
+class CastBonusRule(Base):
+    """ボーナスルール（月売上◯円達成で◯円、本指名◯本で◯円 等）"""
+    __tablename__ = "cast_bonus_rules"
+    id              = Column(Integer, primary_key=True)
+    store_id        = Column(Integer, ForeignKey("stores.id"))
+    rule_name       = Column(String, default="")  # 例: "月売上50万達成"
+    metric          = Column(String, default="sales")  # sales / hon_count / dohan_count
+    threshold       = Column(Float, default=0.0)
+    bonus_amount    = Column(Float, default=0.0)
+    is_active       = Column(Boolean, default=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
 # ─────────────────────────── Pydantic ───────────────────────────
 
 class CastSalaryConfigIn(BaseModel):
@@ -142,6 +168,56 @@ def compute_cast_salary(db, store_id: int, year: int, month: int) -> List[dict]:
 
         total = time_pay + drink_back_total + bottle_back_total + nom_pay + floor_pay
 
+        # ── v1.0.1: 控除（罰金・衣装代等）合計 ──
+        deduction_total = 0.0
+        deductions = []
+        try:
+            ded_rows = db.query(CastDeduction).filter_by(
+                cast_id=cast.id, store_id=store_id, year=year, month=month).all()
+            for d in ded_rows:
+                deduction_total += float(d.amount or 0)
+                deductions.append({
+                    "id": d.id,
+                    "type": d.deduction_type,
+                    "amount": float(d.amount or 0),
+                    "note": d.note or "",
+                })
+        except Exception:
+            pass
+
+        # ── v1.0.1: ボーナス（達成判定） ──
+        bonus_total = 0.0
+        achievements = []
+        try:
+            rules = db.query(CastBonusRule).filter_by(
+                store_id=store_id, is_active=True).all()
+            for rule in rules:
+                if rule.metric == "sales":
+                    # 当月のキャスト売上合計（バック総額 + 指名料 + 場内バック）
+                    metric_value = drink_back_total + bottle_back_total + nom_pay + floor_pay
+                elif rule.metric == "hon_count":
+                    metric_value = nom_count["hon"]
+                elif rule.metric == "dohan_count":
+                    metric_value = nom_count["dohan"]
+                elif rule.metric == "jyonai_count":
+                    metric_value = nom_count["jyonai"]
+                else:
+                    continue
+                if metric_value >= (rule.threshold or 0):
+                    bonus_total += float(rule.bonus_amount or 0)
+                    achievements.append({
+                        "rule_name": rule.rule_name,
+                        "metric": rule.metric,
+                        "threshold": float(rule.threshold or 0),
+                        "achieved": metric_value,
+                        "bonus": float(rule.bonus_amount or 0),
+                    })
+        except Exception:
+            pass
+
+        # 支給額（控除を引いてボーナス足す）
+        net_pay = total - deduction_total + bonus_total
+
         results.append({
             "cast_id":       cast.id,
             "cast_name":     cast.name,
@@ -157,6 +233,12 @@ def compute_cast_salary(db, store_id: int, year: int, month: int) -> List[dict]:
             "nom_pay":       round(nom_pay),
             "floor_pay":     round(floor_pay),
             "total":         round(total),
+            # v1.0.1: 控除・ボーナス・支給額
+            "deduction_total": round(deduction_total),
+            "deductions":      deductions,
+            "bonus_total":     round(bonus_total),
+            "achievements":    achievements,
+            "net_pay":         round(net_pay),
         })
 
     return results
@@ -391,6 +473,129 @@ def get_douhan_stats(store_id: int, year: int = None, month: int = None,
     finally:
         db.close()
 
+# ─────────────────────────── v1.0.1: 控除 API ───────────────────────────
+
+class DeductionIn(BaseModel):
+    cast_id: int
+    store_id: int = 1
+    year: int
+    month: int
+    deduction_type: str = "other"
+    amount: float
+    note: str = ""
+
+@router.get("/salary/deductions")
+def list_deductions(store_id: int = 1, cast_id: Optional[int] = None,
+                     year: Optional[int] = None, month: Optional[int] = None,
+                     x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    db = SessionLocal()
+    try:
+        q = db.query(CastDeduction).filter_by(store_id=store_id)
+        if cast_id is not None: q = q.filter_by(cast_id=cast_id)
+        if year is not None: q = q.filter_by(year=year)
+        if month is not None: q = q.filter_by(month=month)
+        rows = q.order_by(CastDeduction.created_at.desc()).all()
+        return [{
+            "id": r.id, "cast_id": r.cast_id, "store_id": r.store_id,
+            "year": r.year, "month": r.month,
+            "deduction_type": r.deduction_type, "amount": r.amount,
+            "note": r.note,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    finally:
+        db.close()
+
+@router.post("/salary/deductions")
+def add_deduction(payload: DeductionIn,
+                   x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    if payload.amount < 0:
+        raise HTTPException(400, "金額はゼロ以上にしてください")
+    db = SessionLocal()
+    try:
+        d = CastDeduction(
+            cast_id=payload.cast_id, store_id=payload.store_id,
+            year=payload.year, month=payload.month,
+            deduction_type=payload.deduction_type,
+            amount=payload.amount, note=payload.note,
+        )
+        db.add(d); db.commit(); db.refresh(d)
+        return {"ok": True, "id": d.id}
+    finally:
+        db.close()
+
+@router.delete("/salary/deductions/{rec_id}")
+def delete_deduction(rec_id: int,
+                      x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    db = SessionLocal()
+    try:
+        d = db.get(CastDeduction, rec_id)
+        if not d: raise HTTPException(404, "Not found")
+        db.delete(d); db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+# ─────────────────────────── v1.0.1: ボーナスルール API ───────────────────────────
+
+class BonusRuleIn(BaseModel):
+    store_id: int = 1
+    rule_name: str
+    metric: str = "sales"  # sales / hon_count / dohan_count / jyonai_count
+    threshold: float
+    bonus_amount: float
+    is_active: bool = True
+
+@router.get("/salary/bonus-rules")
+def list_bonus_rules(store_id: int = 1,
+                      x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    db = SessionLocal()
+    try:
+        rows = db.query(CastBonusRule).filter_by(store_id=store_id).order_by(CastBonusRule.created_at.desc()).all()
+        return [{
+            "id": r.id, "store_id": r.store_id,
+            "rule_name": r.rule_name, "metric": r.metric,
+            "threshold": r.threshold, "bonus_amount": r.bonus_amount,
+            "is_active": r.is_active,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    finally:
+        db.close()
+
+@router.post("/salary/bonus-rules")
+def add_bonus_rule(payload: BonusRuleIn,
+                    x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    if payload.metric not in ("sales", "hon_count", "dohan_count", "jyonai_count"):
+        raise HTTPException(400, "metric は sales/hon_count/dohan_count/jyonai_count")
+    db = SessionLocal()
+    try:
+        r = CastBonusRule(
+            store_id=payload.store_id, rule_name=payload.rule_name,
+            metric=payload.metric, threshold=payload.threshold,
+            bonus_amount=payload.bonus_amount, is_active=payload.is_active,
+        )
+        db.add(r); db.commit(); db.refresh(r)
+        return {"ok": True, "id": r.id}
+    finally:
+        db.close()
+
+@router.delete("/salary/bonus-rules/{rec_id}")
+def delete_bonus_rule(rec_id: int,
+                       x_role: Optional[str] = Header(None, alias="X-Role")):
+    require_role(x_role, ADMIN_ROLES)
+    db = SessionLocal()
+    try:
+        r = db.get(CastBonusRule, rec_id)
+        if not r: raise HTTPException(404, "Not found")
+        db.delete(r); db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
 # ─────────────────────────── Salary UI ───────────────────────────
 
 @router.get("/ui/salary", response_class=HTMLResponse)
@@ -450,6 +655,8 @@ td.num{text-align:right;font-family:monospace}
     <button class="btn" onclick="loadConfigs()">給与設定を表示</button>
     <button class="btn" onclick="loadDouhanStats()" style="background:#4a1942;border-color:#e879f9;color:#f0abfc">同伴集計</button>
     <button class="btn" onclick="toggleDouhanConfig()" style="background:#3b0764;border-color:#a855f7;color:#c084fc">同伴バック率設定</button>
+    <button class="btn" onclick="toggleDeductionPanel()" style="background:#7c2d12;border-color:#ef4444;color:#fca5a5">💸 控除入力</button>
+    <button class="btn" onclick="toggleBonusPanel()" style="background:#713f12;border-color:#f59e0b;color:#fcd34d">🏆 ボーナスルール</button>
   </div>
 
   <!-- 同伴バック率設定（店舗単位） -->
@@ -490,10 +697,71 @@ td.num{text-align:right;font-family:monospace}
       <thead><tr>
         <th>名前</th><th>ランク</th><th>勤務時間</th><th>時給分</th>
         <th>ドリンクバック</th><th>ボトルバック</th><th>本指名</th><th>場内指名</th><th>同伴</th>
-        <th>指名料</th><th>場内料</th><th style="text-align:right">合計</th>
+        <th>指名料</th><th>場内料</th><th style="text-align:right">小計</th>
+        <th style="color:#fca5a5">控除</th><th style="color:#fcd34d">ボーナス</th>
+        <th style="text-align:right;color:#86efac">支給額</th>
       </tr></thead>
       <tbody id="reportBody"></tbody>
       <tfoot id="reportFoot"></tfoot>
+    </table>
+  </div>
+
+  <!-- 控除入力パネル -->
+  <div class="card" id="deductionPanel" style="display:none">
+    <h2>💸 控除入力（罰金・衣装代等）</h2>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">控除を追加すると、選択した月の給与レポートの「支給額」から自動で差し引かれます。</p>
+    <div class="grid3">
+      <label>キャスト
+        <select id="ded_cast"></select></label>
+      <label>種別
+        <select id="ded_type">
+          <option value="late">遅刻罰金</option>
+          <option value="absent">欠勤罰金</option>
+          <option value="penalty">ペナルティ</option>
+          <option value="equipment">衣装・備品代</option>
+          <option value="other">その他</option>
+        </select></label>
+      <label>金額
+        <div class="row" style="gap:6px;align-items:center"><span>¥</span><input id="ded_amount" type="number" min="0" step="100" placeholder="3000"></div></label>
+    </div>
+    <label style="margin-top:10px">メモ（任意）
+      <input id="ded_note" placeholder="例: 8月15日 30分遅刻"></label>
+    <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <button class="btn solid" onclick="addDeduction()">この控除を登録</button>
+    </div>
+    <h2 style="margin-top:24px">📋 該当月の控除一覧</h2>
+    <table>
+      <thead><tr><th>キャスト</th><th>種別</th><th>金額</th><th>メモ</th><th></th></tr></thead>
+      <tbody id="ded_list"></tbody>
+    </table>
+  </div>
+
+  <!-- ボーナスルール設定パネル -->
+  <div class="card" id="bonusPanel" style="display:none">
+    <h2>🏆 ボーナスルール設定</h2>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">月内に条件を達成したキャストの給与に自動でボーナスが加算されます。</p>
+    <div class="grid3">
+      <label>ルール名
+        <input id="bonus_name" placeholder="例: 月売上50万達成"></label>
+      <label>指標
+        <select id="bonus_metric">
+          <option value="sales">売上合計（バック+指名料）</option>
+          <option value="hon_count">本指名 本数</option>
+          <option value="dohan_count">同伴 本数</option>
+          <option value="jyonai_count">場内指名 本数</option>
+        </select></label>
+      <label>達成基準
+        <input id="bonus_threshold" type="number" min="0" placeholder="500000 (円 or 本)"></label>
+    </div>
+    <label style="margin-top:10px">ボーナス額
+      <div class="row" style="gap:6px;align-items:center"><span>¥</span><input id="bonus_amount" type="number" min="0" step="1000" placeholder="30000"></div></label>
+    <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <button class="btn solid" onclick="addBonusRule()">このルールを追加</button>
+    </div>
+    <h2 style="margin-top:24px">📋 登録済みルール</h2>
+    <table>
+      <thead><tr><th>ルール名</th><th>指標</th><th>基準</th><th>ボーナス額</th><th>状態</th><th></th></tr></thead>
+      <tbody id="bonus_list"></tbody>
     </table>
   </div>
 
@@ -534,9 +802,13 @@ async function loadReport(){
     $('reportTitle').textContent=`${y}年${m}月 給与レポート`;
     const tb=$('reportBody');
     tb.innerHTML='';
-    let totTime=0,totDB=0,totBB=0,totNom=0,totFloor=0,totAll=0;
+    let totTime=0,totDB=0,totBB=0,totNom=0,totFloor=0,totAll=0,totDed=0,totBonus=0,totNet=0;
     (d.casts||[]).forEach(c=>{
       const tr=document.createElement('tr');
+      const achievementTip = (c.achievements||[]).map(a=>`✓ ${a.rule_name}`).join('\\n');
+      const bonusCell = (c.bonus_total||0)>0
+        ? `<span title="${achievementTip}" style="color:#fcd34d;cursor:help">¥${(c.bonus_total||0).toLocaleString()} 🏆</span>`
+        : `¥0`;
       tr.innerHTML=`<td>${c.cast_name}</td><td>${c.rank||''}</td>
         <td class="num">${c.hours_worked}h</td><td class="num">¥${(c.time_pay||0).toLocaleString()}</td>
         <td class="num">¥${(c.drink_back||0).toLocaleString()}</td>
@@ -544,10 +816,14 @@ async function loadReport(){
         <td class="num">${c.nom_hon}</td><td class="num">${c.nom_jyonai}</td><td class="num">${c.nom_dohan}</td>
         <td class="num">¥${(c.nom_pay||0).toLocaleString()}</td>
         <td class="num">¥${(c.floor_pay||0).toLocaleString()}</td>
-        <td class="num"><b>¥${(c.total||0).toLocaleString()}</b></td>`;
+        <td class="num">¥${(c.total||0).toLocaleString()}</td>
+        <td class="num" style="color:#fca5a5">${(c.deduction_total||0)>0?'-¥'+c.deduction_total.toLocaleString():'¥0'}</td>
+        <td class="num">${bonusCell}</td>
+        <td class="num"><b style="color:#86efac">¥${(c.net_pay||c.total||0).toLocaleString()}</b></td>`;
       tb.appendChild(tr);
       totTime+=c.time_pay||0; totDB+=c.drink_back||0; totBB+=c.bottle_back||0;
       totNom+=c.nom_pay||0; totFloor+=c.floor_pay||0; totAll+=c.total||0;
+      totDed+=c.deduction_total||0; totBonus+=c.bonus_total||0; totNet+=c.net_pay||c.total||0;
     });
     $('reportFoot').innerHTML=`<tr style="border-top:2px solid var(--accent)">
       <td colspan="3"><b>合計</b></td>
@@ -557,7 +833,10 @@ async function loadReport(){
       <td colspan="3"></td>
       <td class="num">¥${totNom.toLocaleString()}</td>
       <td class="num">¥${totFloor.toLocaleString()}</td>
-      <td class="num"><b>¥${totAll.toLocaleString()}</b></td></tr>`;
+      <td class="num">¥${totAll.toLocaleString()}</td>
+      <td class="num" style="color:#fca5a5">-¥${totDed.toLocaleString()}</td>
+      <td class="num" style="color:#fcd34d">¥${totBonus.toLocaleString()}</td>
+      <td class="num"><b style="color:#86efac">¥${totNet.toLocaleString()}</b></td></tr>`;
   }catch(e){alert(e.message)}
 }
 
@@ -672,6 +951,135 @@ async function loadDouhanStats(){
       tb.appendChild(tr);
     });
   }catch(e){alert(e.message)}
+}
+
+// ─────────────── v1.0.1: 控除・ボーナス ───────────────
+const DED_LABELS = {late:'遅刻', absent:'欠勤', penalty:'ペナルティ', equipment:'衣装/備品', other:'その他'};
+const METRIC_LABELS = {sales:'売上合計', hon_count:'本指名数', dohan_count:'同伴数', jyonai_count:'場内指名数'};
+
+async function toggleDeductionPanel(){
+  const p = $('deductionPanel');
+  const showing = p.style.display !== 'none';
+  p.style.display = showing ? 'none' : '';
+  $('bonusPanel').style.display = 'none';
+  if(!showing){
+    await loadCastsForSelect();
+    await loadDeductions();
+  }
+}
+
+async function toggleBonusPanel(){
+  const p = $('bonusPanel');
+  const showing = p.style.display !== 'none';
+  p.style.display = showing ? 'none' : '';
+  $('deductionPanel').style.display = 'none';
+  if(!showing){
+    await loadBonusRules();
+  }
+}
+
+async function loadCastsForSelect(){
+  const s = $('storeId').value;
+  try{
+    const casts = await api(`/casts?store_id=${s}`);
+    const sel = $('ded_cast');
+    sel.innerHTML = casts.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  }catch(e){alert('キャスト取得失敗: '+e.message)}
+}
+
+async function loadDeductions(){
+  const s=$('storeId').value, y=$('year').value, m=$('month').value;
+  if(!y || !m){
+    $('ded_list').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">年月を選択してから表示</td></tr>';
+    return;
+  }
+  try{
+    const rows = await api(`/salary/deductions?store_id=${s}&year=${y}&month=${m}`);
+    const casts = await api(`/casts?store_id=${s}`);
+    const nameMap = Object.fromEntries(casts.map(c=>[c.id, c.name]));
+    if(!rows.length){
+      $('ded_list').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">登録なし</td></tr>';
+      return;
+    }
+    $('ded_list').innerHTML = rows.map(r=>`
+      <tr>
+        <td>${nameMap[r.cast_id]||'(不明)'}</td>
+        <td>${DED_LABELS[r.deduction_type]||r.deduction_type}</td>
+        <td class="num">-¥${r.amount.toLocaleString()}</td>
+        <td>${r.note||''}</td>
+        <td><button class="btn" onclick="deleteDeduction(${r.id})" style="font-size:11px;padding:4px 10px">削除</button></td>
+      </tr>`).join('');
+  }catch(e){alert(e.message)}
+}
+
+async function addDeduction(){
+  const s = parseInt($('storeId').value||1);
+  const y = parseInt($('year').value);
+  const m = parseInt($('month').value);
+  const cast_id = parseInt($('ded_cast').value);
+  const amount = parseFloat($('ded_amount').value||0);
+  const deduction_type = $('ded_type').value;
+  const note = $('ded_note').value||'';
+  if(!y||!m){alert('年・月を選択してください');return;}
+  if(!cast_id){alert('キャストを選択してください');return;}
+  if(!(amount>0)){alert('金額を入力してください');return;}
+  try{
+    await api('/salary/deductions',{method:'POST',body:{store_id:s,cast_id,year:y,month:m,deduction_type,amount,note}});
+    $('ded_amount').value=''; $('ded_note').value='';
+    await loadDeductions();
+  }catch(e){alert('登録失敗: '+e.message)}
+}
+
+async function deleteDeduction(id){
+  if(!confirm('この控除を削除しますか？')) return;
+  try{
+    await api(`/salary/deductions/${id}`,{method:'DELETE'});
+    await loadDeductions();
+  }catch(e){alert('削除失敗: '+e.message)}
+}
+
+async function loadBonusRules(){
+  const s = $('storeId').value;
+  try{
+    const rows = await api(`/salary/bonus-rules?store_id=${s}`);
+    if(!rows.length){
+      $('bonus_list').innerHTML = '<tr><td colspan="6" style="color:var(--muted)">ルール未登録</td></tr>';
+      return;
+    }
+    $('bonus_list').innerHTML = rows.map(r=>`
+      <tr style="${r.is_active?'':'opacity:.4'}">
+        <td>${r.rule_name}</td>
+        <td>${METRIC_LABELS[r.metric]||r.metric}</td>
+        <td class="num">${r.metric==='sales'?'¥'+r.threshold.toLocaleString():r.threshold+'本'}</td>
+        <td class="num">¥${r.bonus_amount.toLocaleString()}</td>
+        <td>${r.is_active?'有効':'無効'}</td>
+        <td><button class="btn" onclick="deleteBonusRule(${r.id})" style="font-size:11px;padding:4px 10px">削除</button></td>
+      </tr>`).join('');
+  }catch(e){alert(e.message)}
+}
+
+async function addBonusRule(){
+  const s = parseInt($('storeId').value||1);
+  const rule_name = $('bonus_name').value.trim();
+  const metric = $('bonus_metric').value;
+  const threshold = parseFloat($('bonus_threshold').value||0);
+  const bonus_amount = parseFloat($('bonus_amount').value||0);
+  if(!rule_name){alert('ルール名を入力してください');return;}
+  if(!(threshold>0)){alert('達成基準を入力してください');return;}
+  if(!(bonus_amount>0)){alert('ボーナス額を入力してください');return;}
+  try{
+    await api('/salary/bonus-rules',{method:'POST',body:{store_id:s,rule_name,metric,threshold,bonus_amount,is_active:true}});
+    $('bonus_name').value=''; $('bonus_threshold').value=''; $('bonus_amount').value='';
+    await loadBonusRules();
+  }catch(e){alert('登録失敗: '+e.message)}
+}
+
+async function deleteBonusRule(id){
+  if(!confirm('このルールを削除しますか？')) return;
+  try{
+    await api(`/salary/bonus-rules/${id}`,{method:'DELETE'});
+    await loadBonusRules();
+  }catch(e){alert('削除失敗: '+e.message)}
 }
 </script>
 </body></html>

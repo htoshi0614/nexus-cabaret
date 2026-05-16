@@ -93,15 +93,27 @@ def main():
         # ───────────────────────────────────────────
         # テーブル (T1〜T12 通常席 + VIP-1〜VIP-3)
         # ───────────────────────────────────────────
-        table_names = [
-            "T1", "T2", "T3", "T4", "T5", "T6",
-            "T7", "T8", "T9", "T10", "T11", "T12",
-            "VIP-1", "VIP-2", "VIP-3",
+        # 通常席（normal）とVIP席（vip + 追加料金）に分けて作成
+        table_defs = [
+            # 通常席
+            *[{"name": n, "seat_type": "normal", "extra_fee_pp": 0} for n in [
+                "T1", "T2", "T3", "T4", "T5", "T6",
+                "T7", "T8", "T9", "T10", "T11", "T12",
+            ]],
+            # VIPルーム（1人あたり ¥3,000 追加）
+            {"name": "VIP-1", "seat_type": "vip", "extra_fee_pp": 3000},
+            {"name": "VIP-2", "seat_type": "vip", "extra_fee_pp": 3000},
+            {"name": "VIP-3", "seat_type": "vip", "extra_fee_pp": 5000},
         ]
+        table_names = [d["name"] for d in table_defs]
         existing_tables = {t.name for t in db.query(Table).filter_by(store_id=store_id).all()}
-        for tname in table_names:
-            if tname not in existing_tables:
-                db.add(Table(store_id=store_id, name=tname))
+        for td in table_defs:
+            if td["name"] not in existing_tables:
+                db.add(Table(
+                    store_id=store_id, name=td["name"],
+                    seat_type=td["seat_type"],
+                    extra_fee_pp=td["extra_fee_pp"],
+                ))
         tables_added = [t for t in table_names if t not in existing_tables]
         if tables_added:
             print(f"✅ テーブル作成: {', '.join(tables_added)}")
@@ -162,13 +174,13 @@ def main():
             {"name": "焼酎ボトル",             "category": "bottle", "price": 10000.0, "keepable": True, "capacity_ml": 720},
             {"name": "ウイスキーボトル（バーボン）", "category": "bottle", "price": 15000.0, "keepable": True, "capacity_ml": 700},
             {"name": "ワインボトル（赤/白）",    "category": "bottle", "price": 15000.0, "keepable": False, "capacity_ml": 750},
-            # ━━ シャンパン（キャバクラの花形）━━
-            {"name": "モエ・エ・シャンドン",     "category": "bottle", "price": 30000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "ヴーヴ・クリコ",          "category": "bottle", "price": 40000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "ドンペリ 白",             "category": "bottle", "price": 80000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "ドンペリ ロゼ",           "category": "bottle", "price": 120000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "クリスタル",             "category": "bottle", "price": 150000.0, "keepable": False, "capacity_ml": 750},
-            {"name": "エンジェルシャンパン",    "category": "bottle", "price": 200000.0, "keepable": False, "capacity_ml": 750},
+            # ━━ シャンパン（キャバクラの花形・キャストへの固定バック額付き）━━
+            {"name": "モエ・エ・シャンドン",     "category": "bottle", "price": 30000.0,  "keepable": False, "capacity_ml": 750, "bottle_back_amount": 3000},
+            {"name": "ヴーヴ・クリコ",          "category": "bottle", "price": 40000.0,  "keepable": False, "capacity_ml": 750, "bottle_back_amount": 4000},
+            {"name": "ドンペリ 白",             "category": "bottle", "price": 80000.0,  "keepable": False, "capacity_ml": 750, "bottle_back_amount": 8000},
+            {"name": "ドンペリ ロゼ",           "category": "bottle", "price": 120000.0, "keepable": False, "capacity_ml": 750, "bottle_back_amount": 12000},
+            {"name": "クリスタル",             "category": "bottle", "price": 150000.0, "keepable": False, "capacity_ml": 750, "bottle_back_amount": 15000},
+            {"name": "エンジェルシャンパン",    "category": "bottle", "price": 200000.0, "keepable": False, "capacity_ml": 750, "bottle_back_amount": 20000},
             # ━━ フード ━━
             {"name": "フルーツ盛合せ",          "category": "food",   "price": 3000.0},
             {"name": "チーズ盛合せ",            "category": "food",   "price": 2500.0},
@@ -186,6 +198,7 @@ def main():
                     stock=99,
                     keepable=it.get("keepable", False),
                     capacity_ml=it.get("capacity_ml", 0),
+                    bottle_back_amount=it.get("bottle_back_amount", 0),
                 ))
         items_added = [i["name"] for i in item_data if i["name"] not in existing_items]
         if items_added:
@@ -256,15 +269,49 @@ def main():
         except Exception as e:
             print(f"  キャスト給与設定スキップ: {e}")
 
+        # ───────────────────────────────────────────
+        # サンプル控除（罰金）— 任意キャストに1件だけ
+        # ───────────────────────────────────────────
+        try:
+            from cast_salary import CastDeduction, CastBonusRule
+            now = datetime.utcnow()
+            existing_ded = db.query(CastDeduction).filter_by(store_id=store_id).first()
+            if not existing_ded and all_casts:
+                # 末尾キャスト（ヘルプ）に遅刻罰金デモデータ
+                sample_cast = all_casts[-1]
+                db.add(CastDeduction(
+                    cast_id=sample_cast.id, store_id=store_id,
+                    year=now.year, month=now.month,
+                    deduction_type="late", amount=3000,
+                    note="サンプル: 遅刻罰金",
+                ))
+                print(f"✅ サンプル控除: {sample_cast.name} ¥3,000（遅刻）")
+
+            # サンプルボーナスルール
+            existing_rules = db.query(CastBonusRule).filter_by(store_id=store_id).count()
+            if existing_rules == 0:
+                samples = [
+                    {"rule_name": "月売上¥500,000達成", "metric": "sales",       "threshold": 500000, "bonus_amount": 30000},
+                    {"rule_name": "本指名 月20本達成",   "metric": "hon_count",   "threshold": 20,      "bonus_amount": 20000},
+                    {"rule_name": "同伴 月10本達成",     "metric": "dohan_count", "threshold": 10,      "bonus_amount": 15000},
+                ]
+                for s in samples:
+                    db.add(CastBonusRule(store_id=store_id, is_active=True, **s))
+                print(f"✅ サンプルボーナスルール: 3件")
+        except Exception as e:
+            print(f"  サンプル控除/ボーナススキップ: {e}")
+
         db.commit()
         print()
         print("━" * 50)
         print("🍸 NEXUS Cabaret デモデータの投入が完了しました！")
-        print(f"   店舗名 : Cabaret VENUS（デモ）")
-        print(f"   テーブル: T1〜T12 + VIP-1〜VIP-3（計15席）")
-        print(f"   キャスト: 12名（No.1/主任/人気/レギュラー/新人/ヘルプ）")
-        print(f"   メニュー: シャンパン10種以上含む計25品")
-        print(f"   ログインパスワード: posstart2024")
+        print(f"   店舗名     : Cabaret VENUS（デモ）")
+        print(f"   テーブル   : T1〜T12（通常）+ VIP-1〜3（追加料金 ¥3,000〜¥5,000/人）")
+        print(f"   キャスト   : 12名（No.1/主任/人気/レギュラー/新人/ヘルプ）")
+        print(f"   メニュー   : 計25品（シャンパン6種に商品別バック額¥3K〜¥20K）")
+        print(f"   控除       : サンプル1件（遅刻罰金）")
+        print(f"   ボーナス   : サンプルルール3件")
+        print(f"   ログインPW : posstart2024")
         print("━" * 50)
 
     except Exception as e:

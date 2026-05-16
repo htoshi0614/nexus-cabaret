@@ -71,7 +71,7 @@ def _record_attempt(ip: str):
     _login_attempts[ip].append(now)
 
 # ---------- バージョン情報・アップデート通知 ----------
-POSSTART_VERSION = "1.0.0"
+POSSTART_VERSION = "1.0.1"
 
 @app.get("/api/version")
 def api_version():
@@ -707,6 +707,8 @@ class Table(Base):
     id = Column(Integer, primary_key=True)
     store_id = Column(Integer, ForeignKey("stores.id"))
     name = Column(String)
+    seat_type    = Column(String, default="normal")  # normal / vip
+    extra_fee_pp = Column(Float, default=0.0)         # VIP席等の追加料金（円/人）
     store = relationship("Store")
 
 class Cast(Base):
@@ -728,6 +730,7 @@ class Item(Base):
     stock = Column(Integer, default=0)
     keepable = Column(Boolean, default=False)
     capacity_ml = Column(Integer, default=0)
+    bottle_back_amount = Column(Float, default=0.0)  # 商品別ボトルバック固定額(円/本)、0なら CastSalaryConfig.bottle_back_rate を使用
     store = relationship("Store")
 
 class Customer(Base):
@@ -1035,6 +1038,29 @@ try:
 except Exception:
     pass
 
+# --- v1.0.1: キャバクラ機能用カラム ---
+try:
+    with engine.connect() as conn:
+        from sqlalchemy import text, inspect as sa_inspect_cab
+        # items.bottle_back_amount
+        cols_items = [c["name"] for c in sa_inspect_cab(engine).get_columns("items")]
+        if "bottle_back_amount" not in cols_items:
+            conn.execute(text("ALTER TABLE items ADD COLUMN bottle_back_amount FLOAT DEFAULT 0.0"))
+            conn.commit()
+            print("[migrate] items.bottle_back_amount added")
+        # tables.seat_type
+        cols_tables = [c["name"] for c in sa_inspect_cab(engine).get_columns("tables")]
+        if "seat_type" not in cols_tables:
+            conn.execute(text("ALTER TABLE tables ADD COLUMN seat_type VARCHAR DEFAULT 'normal'"))
+            conn.commit()
+            print("[migrate] tables.seat_type added")
+        if "extra_fee_pp" not in cols_tables:
+            conn.execute(text("ALTER TABLE tables ADD COLUMN extra_fee_pp FLOAT DEFAULT 0.0"))
+            conn.commit()
+            print("[migrate] tables.extra_fee_pp added")
+except Exception as e:
+    print(f"[migrate] cabaret cols: {e}")
+
 # --- sessions.discount_* マイグレーション ---
 try:
     with engine.connect() as conn:
@@ -1129,7 +1155,11 @@ def compute_bill(db, s: Session) -> Dict:
     vip_fee      = 0.0
     if config:
         table_charge = (config.table_charge_pp or 0) * s.guest_count
-        vip_fee      = config.vip_seat_fee or 0
+    # 卓固有の追加料金（VIP席等）が設定されていれば優先、なければstoreグローバルのvip_seat_fee
+    if s.table and getattr(s.table, "seat_type", "normal") == "vip" and getattr(s.table, "extra_fee_pp", 0):
+        vip_fee = s.table.extra_fee_pp * s.guest_count
+    elif config:
+        vip_fee = config.vip_seat_fee or 0
 
     order_subtotal = sum(o.unit_price * o.qty for o in s.orders)
 
@@ -1438,14 +1468,20 @@ def add_order(session_id: int, payload: OrderIn, x_role: Optional[Role] = Header
             try:
                 from cast_salary import CastSalaryConfig, DrinkBackRecord
                 cfg = db.query(CastSalaryConfig).filter_by(cast_id=payload.cast_id).first()
+                back_amount = 0
                 if item.category == "drink":
                     rate = cfg.drink_back_rate if cfg else 0
+                    back_amount = item.price * payload.qty * rate
                     back_type = "drink"
                 else:  # bottle
-                    rate = cfg.bottle_back_rate if cfg else 0
+                    # 商品別固定額が優先、なければキャスト個別の率
+                    if getattr(item, "bottle_back_amount", 0) and item.bottle_back_amount > 0:
+                        back_amount = item.bottle_back_amount * payload.qty
+                    else:
+                        rate = cfg.bottle_back_rate if cfg else 0
+                        back_amount = item.price * payload.qty * rate
                     back_type = "bottle"
-                if rate > 0:
-                    back_amount = item.price * payload.qty * rate  # サービス料抜き小計
+                if back_amount > 0:
                     rec = DrinkBackRecord(
                         store_id=s.store_id, cast_id=payload.cast_id,
                         session_id=session_id, order_id=o.id,
