@@ -6,8 +6,8 @@
 #define AppName        "NEXUSCabaret"
 #define AppVersion     "1.0.0"
 #define AppPublisher   "NEXUS Cabaret"
-#define AppURL         "https://github.com/htoshi0614/pos"
-#define AppExeName     "POSStart.exe"
+#define AppURL         "https://github.com/htoshi0614/nexus-cabaret"
+#define AppExeName     "NEXUSCabaret.exe"
 
 [Setup]
 AppId={{b659f948-95a7-4ed6-b9f5-ab030d99ce4f}}
@@ -42,8 +42,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startupicon"; Description: "Windows起動時に自動起動する"; GroupDescription: "起動オプション"; Flags: unchecked
 
 [Files]
-Source: "dist\POSStart\POSStart.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\POSStart\*";             DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\NEXUSCabaret\NEXUSCabaret.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\NEXUSCabaret\*";                DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\.env.example";              DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
 
 [Icons]
