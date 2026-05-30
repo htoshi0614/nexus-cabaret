@@ -4,7 +4,7 @@
 ; ============================================================
 
 #define AppName        "NEXUSCabaret"
-#define AppVersion     "1.0.4"
+#define AppVersion     "1.0.5"
 #define AppPublisher   "NEXUS Cabaret"
 #define AppURL         "https://github.com/htoshi0614/nexus-cabaret"
 #define AppExeName     "NEXUSCabaret.exe"
